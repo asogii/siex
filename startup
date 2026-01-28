@@ -25,7 +25,7 @@ _trim() {
 
 _get_marker() {
     local pid=$1
-    export LC_ALL=C 
+    local LC_ALL=C 
     
     if [[ "$OSTYPE" == "freebsd"* ]]; then
         if command -v procstat >/dev/null 2>&1; then
@@ -45,16 +45,20 @@ _download_file() {
     local out=$2
     log "downloading $url..."
     
-    # 优先检测 curl -> wget -> fetch (FreeBSD原生)
     if command -v curl >/dev/null 2>&1; then
         curl -sL -o "$out" "$url"
     elif command -v wget >/dev/null 2>&1; then
         wget -qO "$out" "$url"
     elif command -v fetch >/dev/null 2>&1; then
-        # FreeBSD native downloader
         fetch -q -o "$out" "$url"
     else
         log "error: no download tool found (curl, wget, or fetch)"
+        return 1
+    fi
+
+    if [ ! -s "$out" ]; then
+        log "error: downloaded file is empty"
+        rm -f "$out"
         return 1
     fi
 }
@@ -133,8 +137,13 @@ _do_start() {
     local bin_file=""
     
     if _check_process "$name"; then
-        log "[$name] running"
+        log "[$name] already running"
         return 0
+    fi
+
+    local log_dir=$(dirname "$output")
+    if [ ! -d "$log_dir" ]; then
+        mkdir -p "$log_dir"
     fi
 
     if [[ "$cmd_bin" == @* ]]; then
@@ -154,14 +163,13 @@ _do_start() {
     echo ":$marker" > "$pfile"
     export "$MARKER_NAME"="$marker"
 
-    nohup "$@" >> "$output" 2>&1 &
+    nohup "$@" < /dev/null >> "$output" 2>&1 &
     local new_pid=$!
     
     echo "$new_pid:$marker" > "$pfile"
-    log "[$name] started ($new_pid)"
+    log "[$name] started (pid: $new_pid)"
 
     if [ -n "$bin_file" ]; then
-        # 防止删除过快导致 Shell 还没来得及加载文件
         sleep 0.5 
         rm -f "$bin_file" 2>/dev/null
     fi
@@ -180,29 +188,26 @@ _do_stop() {
         rm -f "$pfile"
         log "[$name] stopped"
     else
-        log "[$name] down"
+        log "[$name] not running"
         rm -f "$pfile" 2>/dev/null
     fi
 }
 
 _do_status_print() {
-    if _check_process "$1"; then
-        log "[$1] running ($(cat $1.pid | cut -d: -f1))"
+    local name=$1
+    if _check_process "$name"; then
+        local pid=$(cat $name.pid | cut -d: -f1)
+        printf "%-20s %-10s %s\n" "[$name]" "RUNNING" "(pid: $pid)"
     else
-        log "[$1] down"
+        printf "%-20s %-10s\n" "[$name]" "DOWN"
     fi
 }
 
 _validate_and_start() {
     local line="$1"
     
-    if [[ "$line" =~ ^[[:space:]]*# ]]; then
-        return 1
-    fi
-
-    if [[ "$line" != *"|"* ]]; then
-        return 1
-    fi
+    if [[ "$line" =~ ^[[:space:]]*# ]]; then return 1; fi
+    if [[ "$line" != *"|"* ]]; then return 1; fi
 
     line="${line//\$HOME/$HOME}"
 
@@ -275,7 +280,7 @@ status() {
 }
 
 if [ $# -eq 0 ]; then
-    echo "please specify command: start | stop | restart | status | run"
+    echo "Usage: $0 {start|stop|restart|status|run} [service_name]"
 else
     cmd=$1; shift
     case "$cmd" in
@@ -284,8 +289,7 @@ else
         "restart") restart "$@" ;;
         "status")  status "$@" ;;
         "run")     _validate_and_start "$*" ;;
-        "commands") echo "start stop restart status run" ;;
-        *)         echo "command invalid: $cmd" ;;
+        *)         echo "Invalid command: $cmd" ;;
     esac
 fi
 
