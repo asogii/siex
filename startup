@@ -3,8 +3,8 @@
 ROOT_PATH=${START_UP_PATH:-$HOME/.startup}
 CONFIG_FILE=${START_UP_CONFIG_PATH:-$ROOT_PATH/config}
 KILL_WAIT=${START_UP_KILL_WAIT_TIME:-10}
+LOCK_TIMEOUT=${START_UP_LOCK_TIMEOUT:-600}
 TIME_ZONE=${START_UP_TIME_ZONE:-Asia/Shanghai}
-LOCK_TIMEOUT=600 
 
 MARKER_NAME="__STARTUP_${USER}_GUARD_UUID__"
 STATE_DIR="$ROOT_PATH/states"
@@ -52,7 +52,7 @@ _download_file() {
     elif command -v fetch >/dev/null 2>&1; then
         fetch -q -o "$out" "$url"
     else
-        log "error: no download tool found (curl, wget, or fetch)"
+        log "error: no download tool found"
         return 1
     fi
 
