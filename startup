@@ -1,163 +1,269 @@
 #!/bin/bash
 
-: ${START_UP_PATH:=~/.startup}
-: ${START_UP_CONFIG_PATH:=$START_UP_PATH/startup.config}
-: ${START_UP_KILL_WAIT_TIME:=10}
-: ${START_UP_TIME_ZONE:=Asia/Shanghai}
+ROOT_PATH=${START_UP_PATH:-$HOME/.startup}
+CONFIG_FILE=${START_UP_CONFIG_PATH:-$ROOT_PATH/config}
+KILL_WAIT=${START_UP_KILL_WAIT_TIME:-10}
+TIME_ZONE=${START_UP_TIME_ZONE:-Asia/Shanghai}
 
-mkdir -p $START_UP_PATH/states
-cd $START_UP_PATH/states
+LOCK_TIMEOUT=600 
+
+MARKER_NAME="__STARTUP_${USER}_GUARD_UUID__"
+STATE_DIR="$ROOT_PATH/states"
+
+mkdir -p "$STATE_DIR"
+cd "$STATE_DIR" || exit 1
 
 log() {
-	echo "[$(TZ=$START_UP_TIME_ZONE date '+%F %T.%N')]$@"
+    echo "[$(TZ=$TIME_ZONE date '+%F %T.%N')] $@"
 }
-_start() {
-	name=$1; shift
-	log "starting $name"
-	pid=`cat $name.pid 2>/dev/null`
-	ps $pid > /dev/null 2>&1
-	if [ $? -eq 0 ] && [[ "`ps $pid -o lstart=`" == "`cat $name.lstart 2>/dev/null`" ]]; then
-		log "$name already running"
-	else
-		output=$1; shift
-		nohup $@ >> $output 2>&1 &
-		pid=$!
-		echo $pid > $name.pid
-		ps $pid -o lstart= > $name.lstart
-		log "$name start"
-	fi
+
+_trim() {
+    local var="$*"
+    var="${var#"${var%%[![:space:]]*}"}"
+    var="${var%"${var##*[![:space:]]}"}"
+    echo -n "$var"
 }
+
+_get_marker() {
+    local pid=$1
+    if [[ "$OSTYPE" == "freebsd"* ]]; then
+        ps -p "$pid" -wwwE 2>/dev/null | grep -o "$MARKER_NAME=[^ ]*" | cut -d= -f2
+    else
+        if [ -f "/proc/$pid/environ" ]; then
+            grep -aaoZ "$MARKER_NAME=[^[:space:]]*" "/proc/$pid/environ" 2>/dev/null | cut -d= -f2 | tr -d '\0'
+        else
+            ps -p "$pid" -eww 2>/dev/null | grep -o "$MARKER_NAME=[^ ]*" | cut -d= -f2
+        fi
+    fi
+}
+
+_download_file() {
+    local url=$1
+    local out=$2
+    log "downloading $url..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -sL -o "$out" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$out" "$url"
+    else
+        log "error: curl or wget not found"
+        return 1
+    fi
+}
+
+_with_lock() {
+    local name=$1; local action=$2; shift 2
+    local lock="$STATE_DIR/$name.lock"
+
+    if [ -d "$lock" ]; then
+        local mtime=$(stat -c %Y "$lock" 2>/dev/null || stat -f %m "$lock" 2>/dev/null)
+        local now=$(date +%s)
+        if [ $((now - mtime)) -gt $LOCK_TIMEOUT ]; then
+            log "[$name] lock timed out (>10m), breaking it."
+            rmdir "$lock" 2>/dev/null
+        fi
+    fi
+
+    if ! mkdir "$lock" 2>/dev/null; then
+        log "[$name] locked (operation in progress)"
+        return 1
+    fi
+
+    trap 'rmdir "$lock" 2>/dev/null' EXIT INT TERM
+    "$action" "$name" "$@"
+    local ret=$?
+    
+    rmdir "$lock" 2>/dev/null
+    trap - EXIT INT TERM
+    return $ret
+}
+
+_check_process() {
+    local name=$1
+    local pfile="$STATE_DIR/$name.pid"
+    [ ! -f "$pfile" ] && return 1
+
+    local content=$(cat "$pfile")
+    local s_pid=$(echo "$content" | cut -d: -f1)
+    local s_mark=$(echo "$content" | cut -d: -f2)
+
+    if [[ "$s_pid" == "EMPTY" ]]; then
+        local ghost_pid=$(ps -axwwE 2>/dev/null | grep "$name" | grep "$MARKER_NAME=$s_mark" | awk '{print $1}' | head -n 1)
+        if [ -n "$ghost_pid" ]; then
+            echo "$ghost_pid:$s_mark" > "$pfile"
+            return 0
+        fi
+        return 1
+    fi
+
+    if kill -0 "$s_pid" 2>/dev/null && [[ "$(_get_marker $s_pid)" == "$s_mark" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+_do_start() {
+    local name=$1; shift; local output=$1; shift
+    local pfile="$STATE_DIR/$name.pid"
+    
+    local cmd_bin="$1"
+    local bin_file=""
+    
+    if _check_process "$name"; then
+        log "[$name] running"
+        return 0
+    fi
+
+    if [[ "$cmd_bin" == @* ]]; then
+        local url="${cmd_bin#@}"
+        bin_file="$STATE_DIR/$name.bin"
+        
+        rm -f "$bin_file"
+        
+        if ! _download_file "$url" "$bin_file"; then
+            log "[$name] download failed"
+            return 1
+        fi
+        
+        chmod +x "$bin_file"
+        shift
+        set -- "$bin_file" "$@"
+    fi
+
+    local marker="M_$(date +%s)_$((RANDOM%1000))"
+    echo "EMPTY:$marker" > "$pfile"
+    export "$MARKER_NAME"="$marker"
+
+    nohup "$@" >> "$output" 2>&1 &
+    local new_pid=$!
+    
+    echo "$new_pid:$marker" > "$pfile"
+    log "[$name] started ($new_pid)"
+
+    if [ -n "$bin_file" ]; then
+        rm -f "$bin_file" 2>/dev/null
+    fi
+}
+
+_do_stop() {
+    local name=$1; local pfile="$STATE_DIR/$name.pid"
+    if _check_process "$name"; then
+        local pid=$(cat "$pfile" | cut -d: -f1)
+        kill "$pid"
+        local retry=0
+        while kill -0 "$pid" 2>/dev/null && [ $retry -lt $KILL_WAIT ]; do
+            sleep 1; let retry++
+        done
+        [ $retry -eq $KILL_WAIT ] && kill -9 "$pid"
+        rm -f "$pfile"
+        log "[$name] stopped"
+    else
+        log "[$name] down"
+        rm -f "$pfile" 2>/dev/null
+    fi
+}
+
+_do_status_print() {
+    if _check_process "$1"; then
+        log "[$1] running ($(cat $1.pid | cut -d: -f1))"
+    else
+        log "[$1] down"
+    fi
+}
+
 _validate_and_start() {
-	parsed=`eval "echo $1 | xargs"`
-	[ -n "$parsed" ] && _start $parsed || return 1
+    local line="$1"
+    
+    if [[ "$line" =~ ^[[:space:]]*# ]]; then
+        return 1
+    fi
+
+    if [[ "$line" != *"|"* ]]; then
+        return 1
+    fi
+
+    line="${line//\$HOME/$HOME}"
+
+    IFS='|' read -r name output cmd <<< "$line"
+
+    name=$(_trim "$name")
+    output=$(_trim "$output")
+    cmd=$(_trim "$cmd")
+
+    [ -z "$name" ] || [ -z "$output" ] || [ -z "$cmd" ] && return 1
+    _with_lock "$name" "_do_start" "$output" $cmd
 }
-_kill() {
-	kill $1
-	retry=0
-	while kill -0 $1 2>/dev/null && [ $retry -lt $START_UP_KILL_WAIT_TIME ]; do
-		sleep 1s
-		let retry++
-	done
-	if [ $retry -eq $START_UP_KILL_WAIT_TIME ]; then
-		log "kill $1 failed, use kill -9"
-		kill -9 $1
-		retry=0
-		while kill -0 $1 2>/dev/null && [ $retry -lt $START_UP_KILL_WAIT_TIME ]; do
-			sleep 1s
-			let retry++
-		done
-		if [ $retry -eq $START_UP_KILL_WAIT_TIME ]; then
-			log "kill -9 $1 failed"
-		fi
-	fi
-}
+
 start() {
-	if [ $# -eq 0 ]; then
-		if [ -f $START_UP_CONFIG_PATH ]; then
-			while read start_config; do
-				if [ -n "$start_config" ]; then
-					_validate_and_start "$start_config"
-				fi
-			done < $START_UP_CONFIG_PATH
-		else
-			log "no config found at $START_UP_CONFIG_PATH"
-		fi
-	else
-		for name in "$@"; do
-			start_config=`cat $START_UP_CONFIG_PATH 2>/dev/null | grep -m 1 "^$name\s"`
-			if [ -n "$start_config" ]; then
-				_validate_and_start "$start_config" || log "no valid config found for $name"
-			else
-				log "no config found for $name"
-			fi
-		done
-	fi
+    if [ $# -eq 0 ]; then
+        [ ! -f "$CONFIG_FILE" ] && return
+        while read -r config; do
+            local trimmed=$(_trim "$config")
+            [[ -z "$trimmed" || "$trimmed" == \#* ]] && continue
+            _validate_and_start "$config"
+        done < "$CONFIG_FILE"
+    else
+        for name in "$@"; do
+            local cfg=$(grep -E "^[[:space:]]*$name[[:space:]]*\|" "$CONFIG_FILE" | head -n 1)
+            [ -n "$cfg" ] && _validate_and_start "$cfg" || log "no config: $name"
+        done
+    fi
 }
-_try_stop() {
-	name=$1; pid=$2
-	lstart=`cat $name.lstart 2>/dev/null`
-	if [ -z "$pid" ]; then
-		running_lstart="never run"
-	else
-		running_lstart=`ps $pid -o lstart= 2>/dev/null`
-	fi
-	if [ -n "$lstart" ] && [[ "$lstart" == "$running_lstart" ]]; then
-		_kill $pid
-		log "$name($pid) killed"
-	else
-		log "$name is down, running_lstart: $running_lstart"
-	fi
-}
+
 stop() {
-	if [ $# -eq 0 ]; then
-		for pid_file in *.pid; do
-			name="${pid_file%.*}"
-			pid=`cat $pid_file`
-			_try_stop $name $pid
-		done
-	else
-		for name in "$@"; do
-			pid=`cat $name.pid 2>/dev/null`
-			if [ -z "$pid" ]; then
-				log "$name is not configured or not running"
-			else
-				_try_stop $name $pid
-			fi
-		done
-	fi
+    if [ $# -eq 0 ]; then
+        for pf in *.pid; do
+            [ ! -f "$pf" ] && continue
+            _with_lock "${pf%.*}" "_do_stop"
+        done
+    else
+        for n in "$@"; do _with_lock "$n" "_do_stop"; done
+    fi
 }
+
 restart() {
-	if [ $# -eq 0 ]; then
-		stop; start
-	elif [ -f $START_UP_CONFIG_PATH ]; then
-		for name in "$@"; do
-			pid=`cat $name.pid 2>/dev/null`
-			start_config=`cat $START_UP_CONFIG_PATH | grep -m 1 "^$name\s"`
-			if [[ -z "$start_config" ]]; then
-				log "no config found for $name"
-			else
-				_try_stop $name $pid
-				_validate_and_start "$start_config" || log "$name configuration is not valid"
-			fi
-		done
-	else
-		log "no config found at $START_UP_CONFIG_PATH"
-	fi
+    if [ $# -eq 0 ]; then
+        stop
+        start
+    else
+        [ ! -f "$CONFIG_FILE" ] && { log "no config found"; return; }
+        for name in "$@"; do
+            local cfg=$(grep -E "^[[:space:]]*$name[[:space:]]*\|" "$CONFIG_FILE" | head -n 1)
+            if [ -z "$cfg" ]; then
+                log "no config found for $name"
+            else
+                _with_lock "$name" "_do_stop"
+                _validate_and_start "$cfg"
+            fi
+        done
+    fi
 }
+
 status() {
-	for pid_file in *.pid; do
-		name="${pid_file%.*}"
-		pid=`cat $pid_file`
-		lstart=`cat $name.lstart 2>/dev/null`
-		log "$name($pid) lstart: $lstart"
-		running_lstart=`ps $pid -o lstart= 2>/dev/null`
-		if [ -n "$lstart" ] && [[ "$lstart" == "$running_lstart" ]]; then
-			log "$name is running"
-		else
-			log "$name is down, running_lstart: $running_lstart"
-		fi
-	done
+    if [ $# -eq 0 ]; then
+        for pf in *.pid; do
+            [ ! -f "$pf" ] && continue
+            _with_lock "${pf%.*}" "_do_status_print"
+        done
+    else
+        for name in "$@"; do
+            _with_lock "$name" "_do_status_print"
+        done
+    fi
 }
 
 if [ $# -eq 0 ]; then
-	echo "please specify command: start | stop | restart | status | run"
+    echo "please specify command: start | stop | restart | status | run"
 else
-	cmd=$1; shift
-	case "$cmd" in
-		"start")
-			start $@ ;;
-		"stop")
-			stop $@ ;;
-		"restart")
-			restart $@ ;;
-		"status")
-			status $@ ;;
-		"run")
-			_start $@ ;;
-		"commands")
-			echo "start stop restart status run" ;;
-		*)
-			echo "command invalid: $cmd" ;;
-	esac
+    cmd=$1; shift
+    case "$cmd" in
+        "start")   start "$@" ;;
+        "stop")    stop "$@" ;;
+        "restart") restart "$@" ;;
+        "status")  status "$@" ;;
+        "run")     _validate_and_start "$*" ;;
+        "commands") echo "start stop restart status run" ;;
+        *)         echo "command invalid: $cmd" ;;
+    esac
 fi
 
