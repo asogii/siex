@@ -44,12 +44,17 @@ _download_file() {
     local url=$1
     local out=$2
     log "downloading $url..."
+    
+    # 优先检测 curl -> wget -> fetch (FreeBSD原生)
     if command -v curl >/dev/null 2>&1; then
         curl -sL -o "$out" "$url"
     elif command -v wget >/dev/null 2>&1; then
         wget -qO "$out" "$url"
+    elif command -v fetch >/dev/null 2>&1; then
+        # FreeBSD native downloader
+        fetch -q -o "$out" "$url"
     else
-        log "error: curl or wget not found"
+        log "error: no download tool found (curl, wget, or fetch)"
         return 1
     fi
 }
@@ -156,7 +161,7 @@ _do_start() {
     log "[$name] started ($new_pid)"
 
     if [ -n "$bin_file" ]; then
-        # v16.0 Fix: 防止删除过快导致解释器还没打开文件就报错
+        # 防止删除过快导致 Shell 还没来得及加载文件
         sleep 0.5 
         rm -f "$bin_file" 2>/dev/null
     fi
