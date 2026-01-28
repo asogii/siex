@@ -56,5 +56,5 @@ db_proxy | $HOME/logs/proxy.log | ./proxy -c "conf/config with space.ini"
 
 # Remote Execution (@URL)
 # The script will: Download -> chmod +x -> Run -> Delete file
-remote_task | $HOME/logs/task.log | @[http://192.168.1.5/bin/worker](http://192.168.1.5/bin/worker) --port 8080
+remote_task | $HOME/logs/task.log | @http://192.168.1.5/bin/worker --port 8080
 
