@@ -4,7 +4,6 @@ ROOT_PATH=${START_UP_PATH:-$HOME/.startup}
 CONFIG_FILE=${START_UP_CONFIG_PATH:-$ROOT_PATH/config}
 KILL_WAIT=${START_UP_KILL_WAIT_TIME:-10}
 TIME_ZONE=${START_UP_TIME_ZONE:-Asia/Shanghai}
-
 LOCK_TIMEOUT=600 
 
 MARKER_NAME="__STARTUP_${USER}_GUARD_UUID__"
@@ -27,7 +26,9 @@ _trim() {
 _get_marker() {
     local pid=$1
     if [[ "$OSTYPE" == "freebsd"* ]]; then
-        ps -p "$pid" -wwwE 2>/dev/null | grep -o "$MARKER_NAME=[^ ]*" | cut -d= -f2
+        if command -v procstat >/dev/null 2>&1; then
+            procstat -e "$pid" 2>/dev/null | grep -o "$MARKER_NAME=[^ ]*" | cut -d= -f2
+        fi
     else
         if [ -f "/proc/$pid/environ" ]; then
             grep -aaoZ "$MARKER_NAME=[^[:space:]]*" "/proc/$pid/environ" 2>/dev/null | cut -d= -f2 | tr -d '\0'
@@ -59,13 +60,13 @@ _with_lock() {
         local mtime=$(stat -c %Y "$lock" 2>/dev/null || stat -f %m "$lock" 2>/dev/null)
         local now=$(date +%s)
         if [ $((now - mtime)) -gt $LOCK_TIMEOUT ]; then
-            log "[$name] lock timed out (>10m), breaking it."
+            log "[$name] lock timed out, breaking it."
             rmdir "$lock" 2>/dev/null
         fi
     fi
 
     if ! mkdir "$lock" 2>/dev/null; then
-        log "[$name] locked (operation in progress)"
+        log "[$name] locked"
         return 1
     fi
 
@@ -87,8 +88,17 @@ _check_process() {
     local s_pid=$(echo "$content" | cut -d: -f1)
     local s_mark=$(echo "$content" | cut -d: -f2)
 
-    if [[ "$s_pid" == "EMPTY" ]]; then
-        local ghost_pid=$(ps -axwwE 2>/dev/null | grep "$name" | grep "$MARKER_NAME=$s_mark" | awk '{print $1}' | head -n 1)
+    if [[ -z "$s_pid" ]]; then
+        local ghost_pid=""
+        
+        if [[ "$OSTYPE" == "freebsd"* ]]; then
+            if command -v procstat >/dev/null 2>&1; then
+                ghost_pid=$(procstat -ea 2>/dev/null | grep "$MARKER_NAME=$s_mark" | awk '{print $1}' | head -n 1)
+            fi
+        else
+            ghost_pid=$(ps -axwwE 2>/dev/null | grep "$name" | grep "$MARKER_NAME=$s_mark" | awk '{print $1}' | head -n 1)
+        fi
+
         if [ -n "$ghost_pid" ]; then
             echo "$ghost_pid:$s_mark" > "$pfile"
             return 0
@@ -117,21 +127,18 @@ _do_start() {
     if [[ "$cmd_bin" == @* ]]; then
         local url="${cmd_bin#@}"
         bin_file="$STATE_DIR/$name.bin"
-        
         rm -f "$bin_file"
-        
         if ! _download_file "$url" "$bin_file"; then
             log "[$name] download failed"
             return 1
         fi
-        
         chmod +x "$bin_file"
         shift
         set -- "$bin_file" "$@"
     fi
 
-    local marker="M_$(date +%s)_$((RANDOM%1000))"
-    echo "EMPTY:$marker" > "$pfile"
+    local marker="$(date +%s)_$((RANDOM%1000))"
+    echo ":$marker" > "$pfile"
     export "$MARKER_NAME"="$marker"
 
     nohup "$@" >> "$output" 2>&1 &
