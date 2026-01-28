@@ -25,15 +25,17 @@ _trim() {
 
 _get_marker() {
     local pid=$1
+    export LC_ALL=C 
+    
     if [[ "$OSTYPE" == "freebsd"* ]]; then
         if command -v procstat >/dev/null 2>&1; then
-            procstat -e "$pid" 2>/dev/null | grep -o "$MARKER_NAME=[^ ]*" | cut -d= -f2
+            procstat -e "$pid" 2>/dev/null | tr ' ' '\n' | grep "^${MARKER_NAME}=" | cut -d= -f2
         fi
     else
         if [ -f "/proc/$pid/environ" ]; then
-            grep -aaoZ "$MARKER_NAME=[^[:space:]]*" "/proc/$pid/environ" 2>/dev/null | cut -d= -f2 | tr -d '\0'
+            tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep "^${MARKER_NAME}=" | cut -d= -f2
         else
-            ps -p "$pid" -eww 2>/dev/null | grep -o "$MARKER_NAME=[^ ]*" | cut -d= -f2
+            ps -p "$pid" -eww 2>/dev/null | tr ' ' '\n' | grep "^${MARKER_NAME}=" | cut -d= -f2
         fi
     fi
 }
@@ -96,7 +98,10 @@ _check_process() {
                 ghost_pid=$(procstat -ea 2>/dev/null | grep "$MARKER_NAME=$s_mark" | awk '{print $1}' | head -n 1)
             fi
         else
-            ghost_pid=$(ps -axwwE 2>/dev/null | grep "$name" | grep "$MARKER_NAME=$s_mark" | awk '{print $1}' | head -n 1)
+            local match_file=$(grep -al "$MARKER_NAME=$s_mark" /proc/[0-9]*/environ 2>/dev/null | head -n 1)
+            if [ -n "$match_file" ]; then
+                ghost_pid=$(echo "$match_file" | awk -F/ '{print $3}')
+            fi
         fi
 
         if [ -n "$ghost_pid" ]; then
@@ -106,8 +111,11 @@ _check_process() {
         return 1
     fi
 
-    if kill -0 "$s_pid" 2>/dev/null && [[ "$(_get_marker $s_pid)" == "$s_mark" ]]; then
-        return 0
+    if kill -0 "$s_pid" 2>/dev/null; then
+        local current_mark=$(_get_marker "$s_pid")
+        if [[ "$current_mark" == "$s_mark" ]]; then
+            return 0
+        fi
     fi
     return 1
 }
@@ -148,6 +156,8 @@ _do_start() {
     log "[$name] started ($new_pid)"
 
     if [ -n "$bin_file" ]; then
+        # v16.0 Fix: 防止删除过快导致解释器还没打开文件就报错
+        sleep 0.5 
         rm -f "$bin_file" 2>/dev/null
     fi
 }
