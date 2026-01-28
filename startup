@@ -148,7 +148,7 @@ _do_start() {
 
     if [[ "$cmd_bin" == @* ]]; then
         local url="${cmd_bin#@}"
-        bin_file="$STATE_DIR/$name.bin"
+        bin_file="$STATE_DIR/$name"
         rm -f "$bin_file"
         if ! _download_file "$url" "$bin_file"; then
             log "[$name] download failed"
