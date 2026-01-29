@@ -157,7 +157,7 @@ _do_start() {
 
     if [[ "$cmd_bin" == @* ]]; then
         local url="${cmd_bin#@}"
-        bin_file="$STATE_DIR/$name.bin"
+        bin_file="$STATE_DIR/$name"
         rm -f "$bin_file"
         if ! _download_file "$url" "$bin_file"; then
             log "[$name] download failed"
@@ -225,7 +225,15 @@ _validate_and_start() {
     cmd=$(_trim "$cmd")
 
     [ -z "$name" ] || [ -z "$cmd" ] && return 1
-    _with_lock "$name" "_do_start" "$output" $cmd
+
+    local cmd_args=()
+    if [ -n "$cmd" ]; then
+        while IFS= read -r arg; do
+            cmd_args+=("$arg")
+        done < <(echo "$cmd" | xargs -n1 2>/dev/null)
+    fi
+    
+    _with_lock "$name" "_do_start" "$output" "${cmd_args[@]}"
 }
 
 start() {

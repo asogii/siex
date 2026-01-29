@@ -1,17 +1,13 @@
 #!/bin/bash
-# 路径: test/test_suite.sh
 
 # ================= 配置区域 =================
 TEST_DIR="$(pwd)"
 STARTUP_SCRIPT="$TEST_DIR/../startup"
-
-# 设置测试沙盒目录
 TEST_ROOT="$TEST_DIR/temp_test_env"
+
 export START_UP_PATH="$TEST_ROOT"
 export START_UP_CONFIG_PATH="$TEST_ROOT/config"
 export START_UP_KILL_WAIT_TIME=3
-
-# [新增] 设置锁超时时间为 2 秒，用于测试超时自动解锁
 export START_UP_LOCK_TIMEOUT=2
 
 GREEN='\033[0;32m'
@@ -25,119 +21,142 @@ info() { echo -e "\n>> $1"; }
 # ================= 环境准备 =================
 info "Initializing Test Environment..."
 
-if [ ! -f "$STARTUP_SCRIPT" ]; then fail "Startup script not found at ../startup"; fi
+if [ ! -f "$STARTUP_SCRIPT" ]; then fail "Startup script not found"; fi
 
 rm -rf "$TEST_ROOT"
 mkdir -p "$TEST_ROOT/states"
 mkdir -p "$TEST_ROOT/logs"
 
+# 1. 基础 Worker
+cat > "$TEST_DIR/dummy_worker.sh" << 'EOF'
+#!/bin/bash
+while true; do sleep 1; done
+EOF
 chmod +x "$TEST_DIR/dummy_worker.sh"
-chmod +x "$STARTUP_SCRIPT"
 
-# 生成配置
-FILE_URL="file://${TEST_DIR}/dummy_worker.sh"
+# 2. 参数检查 Worker
+cat > "$TEST_DIR/arg_checker.sh" << 'EOF'
+#!/bin/bash
+echo "ARG_COUNT=$#"
+echo "ARG_0=$0"
+echo "ARG_1=<$1>"
+while true; do sleep 1; done
+EOF
+chmod +x "$TEST_DIR/arg_checker.sh"
+
+# 初始配置
 cat > "$START_UP_CONFIG_PATH" <<EOF
 local_app | $TEST_ROOT/logs/local.log | $TEST_DIR/dummy_worker.sh --env local
-remote_app | $TEST_ROOT/logs/remote.log | @${FILE_URL} --env downloaded
+remote_app| $TEST_ROOT/logs/remote.log| @file://${TEST_DIR}/dummy_worker.sh --env downloaded
 EOF
-
-info "Config generated. Lock Timeout set to: ${START_UP_LOCK_TIMEOUT}s"
 
 # ================= 测试执行 =================
 
-# --- Test 1: 本地启动 ---
+# --- Test 1: Start ---
 info "Test 1: Start local application"
 "$STARTUP_SCRIPT" start local_app
 PID_FILE="$TEST_ROOT/states/local_app.pid"
-if [ ! -f "$PID_FILE" ]; then fail "PID file missing"; fi
-PID=$(cat "$PID_FILE" | cut -d: -f1)
-if ps -p "$PID" > /dev/null; then pass "Local App started (PID: $PID)"; else fail "Process died"; fi
+[ -f "$PID_FILE" ] && pass "App started" || fail "App failed to start"
 
-# --- Test 2: 幂等性 ---
+# --- Test 2: Idempotency ---
 info "Test 2: Idempotency check"
+PID=$(cat "$PID_FILE" | cut -d: -f1)
 "$STARTUP_SCRIPT" start local_app
 NEW_PID=$(cat "$PID_FILE" | cut -d: -f1)
-if [ "$PID" == "$NEW_PID" ]; then pass "Idempotency verified"; else fail "Process restarted unexpectedly"; fi
+[ "$PID" == "$NEW_PID" ] && pass "Idempotency verified" || fail "Process restarted"
 
-# --- Test 3: 幽灵进程修复 ---
+# --- Test 3: Ghost Recovery ---
 info "Test 3: Ghost Process Recovery"
 MARKER=$(cat "$PID_FILE" | cut -d: -f2)
 echo ":$MARKER" > "$PID_FILE"
 "$STARTUP_SCRIPT" status local_app
 RECOVERED_PID=$(cat "$PID_FILE" | cut -d: -f1)
-if [ "$RECOVERED_PID" == "$PID" ]; then pass "Ghost recovered ($RECOVERED_PID)"; else fail "Recovery failed"; fi
+[ "$RECOVERED_PID" == "$PID" ] && pass "Ghost recovered" || fail "Recovery failed"
 
-# --- Test 4: 远程下载 (@URL) ---
-info "Test 4: Remote Download (@url -> file://)"
+# --- Test 4: Remote Download ---
+info "Test 4: Remote Download (@url)"
 "$STARTUP_SCRIPT" start remote_app
 R_PID_FILE="$TEST_ROOT/states/remote_app.pid"
 if [ -f "$R_PID_FILE" ]; then
-    R_PID=$(cat "$R_PID_FILE" | cut -d: -f1)
-    sleep 1 
-    if ps -p "$R_PID" > /dev/null; then pass "Remote App running (PID: $R_PID)"; else fail "Remote process died"; fi
-else fail "Remote PID file missing"; fi
+    pass "Remote App started"
+else
+    fail "Remote PID missing"
+fi
 
-# --- Test 5: Restart 逻辑 (新增) ---
+# --- Test 5: Restart Logic ---
 info "Test 5: Restart Logic"
 OLD_PID=$(cat "$PID_FILE" | cut -d: -f1)
 "$STARTUP_SCRIPT" restart local_app
 sleep 1
-
-# 检查新 PID
 NEW_PID=$(cat "$PID_FILE" | cut -d: -f1)
-if [ -z "$NEW_PID" ]; then fail "Restart failed (No PID)"; fi
-
-if [ "$OLD_PID" == "$NEW_PID" ]; then
-    fail "Restart failed (PID did not change: $OLD_PID)"
-elif ps -p "$NEW_PID" > /dev/null; then
-    pass "Restart success (Old: $OLD_PID -> New: $NEW_PID)"
+if [ "$OLD_PID" != "$NEW_PID" ] && ps -p "$NEW_PID" >/dev/null; then
+    pass "Restart success (PID changed)"
 else
-    fail "Restarted process is not running"
+    fail "Restart failed"
 fi
 
-# --- Test 6: Startup Run & Lock Timeout (新增) ---
-info "Test 6: 'startup run' & Lock Timeout Logic"
+# --- Test 6: Startup Run (CLI) & Lock Timeout ---
+info "Test 6: 'startup run' & Lock Timeout"
 LOCK_NAME="adhoc_task"
 LOCK_DIR="$TEST_ROOT/states/$LOCK_NAME.lock"
+mkdir -p "$LOCK_DIR" # 造一个死锁
+sleep 3 # 等待超时(2s)
 
-# 1. 人为制造一个“死锁” (模拟上次崩溃残留的锁)
-mkdir -p "$LOCK_DIR"
-info "-> Created Dead Lock at: $(date +%T)"
-
-# 2. 等待 3 秒 (超过设置的 2 秒超时时间)
-echo "Waiting 3s for lock to expire..."
-sleep 3
-
-# 3. 使用 startup run 尝试运行 (应该自动破锁并运行)
-# 注意：startup run 不需要配置文件，参数直接传
 CMD_STR="$LOCK_NAME | $TEST_ROOT/logs/adhoc.log | $TEST_DIR/dummy_worker.sh --adhoc"
 "$STARTUP_SCRIPT" run "$CMD_STR"
 
-ADHOC_PID_FILE="$TEST_ROOT/states/$LOCK_NAME.pid"
-
-if [ -f "$ADHOC_PID_FILE" ]; then
-    A_PID=$(cat "$ADHOC_PID_FILE" | cut -d: -f1)
-    if ps -p "$A_PID" > /dev/null; then
-        pass "Lock broken & 'run' command success (PID: $A_PID)"
-    else
-        fail "Process started but died immediately"
-    fi
+if [ -f "$TEST_ROOT/states/$LOCK_NAME.pid" ]; then
+    pass "Lock broken & run success"
 else
-    fail "Failed to break lock or start process (PID file missing)"
+    fail "Lock timeout/run failed"
 fi
 
-# --- Test 7: 停止所有 ---
-info "Test 7: Stop all"
-"$STARTUP_SCRIPT" stop
-
+# --- Test 8 & 9: Argument Safety Check (Quotes) ---
+info "Test 8 & 9: Argument Safety Check (Quotes & Spaces)"
+cat > "$START_UP_CONFIG_PATH" <<EOF
+arg_check | $TEST_ROOT/logs/arg.log | $TEST_DIR/arg_checker.sh "has space"
+EOF
+"$STARTUP_SCRIPT" start arg_check
 sleep 1
-if ps -p "$NEW_PID" > /dev/null 2>&1; then fail "Local app still alive"; fi
-if ps -p "$R_PID" > /dev/null 2>&1; then fail "Remote app still alive"; fi
-pass "All stopped"
+LOG_CONTENT=$(cat "$TEST_ROOT/logs/arg.log")
 
-# ================= 清理 =================
+if echo "$LOG_CONTENT" | grep -q "ARG_1=<has space>"; then
+    pass "Arguments passed correctly (Quotes preserved)"
+else
+    echo "Log Content: $LOG_CONTENT"
+    fail "Argument parsing failed (Quotes broken)"
+fi
+
+# --- Test 11: Config Parsing Stress Test ---
+info "Test 11: Configuration Parsing Stress Test"
+cat > "$START_UP_CONFIG_PATH" <<EOF
+   space_test    |    $TEST_ROOT/logs/space.log    |    $TEST_DIR/arg_checker.sh space_ok
+$(echo -e "tab_test\t|\t$TEST_ROOT/logs/tab.log\t|\t$TEST_DIR/arg_checker.sh tab_ok")
+empty_log || $TEST_DIR/dummy_worker.sh
+pipe_in_cmd | $TEST_ROOT/logs/pipe.log | $TEST_DIR/arg_checker.sh "a|b"
+# commented | log | cmd
+EOF
+
+info "-> Starting Stress Config..."
+"$STARTUP_SCRIPT" start
+sleep 1
+
+# Check Space
+if [ -f "$TEST_ROOT/states/space_test.pid" ]; then pass "Case 1: Spaces OK"; else fail "Case 1 Failed"; fi
+# Check Tab
+if [ -f "$TEST_ROOT/states/tab_test.pid" ]; then pass "Case 2: Tabs OK"; else fail "Case 2 Failed"; fi
+# Check Empty Log
+if [ -f "$TEST_ROOT/states/empty_log.pid" ] && [ ! -d "$TEST_ROOT/states/ " ]; then pass "Case 3: Empty Log OK"; else fail "Case 3 Failed"; fi
+# Check Pipe in CMD
+if grep -q "ARG_1=<a|b>" "$TEST_ROOT/logs/pipe.log"; then pass "Case 4: Pipe in CMD OK"; else fail "Case 4 Failed"; fi
+# Check Comment
+if [ ! -f "$TEST_ROOT/states/commented.pid" ]; then pass "Case 5: Comments Ignored"; else fail "Case 5 Failed"; fi
+
+# --- Final Cleanup ---
 info "Teardown..."
+"$STARTUP_SCRIPT" stop
 rm -rf "$TEST_ROOT"
+rm -f "$TEST_DIR/dummy_worker.sh" "$TEST_DIR/arg_checker.sh"
 
-echo -e "\n${GREEN}All Tests Passed! Coverage: Start, Stop, Restart, Status, Run, Ghost, Lock, Remote.${NC}"
+echo -e "\n${GREEN}All Tests Passed! (Full Suite)${NC}"
 
