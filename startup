@@ -141,14 +141,23 @@ _do_start() {
         return 0
     fi
 
-    local log_dir=$(dirname "$output")
-    if [ ! -d "$log_dir" ]; then
-        mkdir -p "$log_dir"
+    output=$(_trim "$output")
+
+    if [ -z "$output" ]; then
+        output="/dev/null"
+    else
+        output=$(bash -c "echo $output")
+        if [[ "$output" != "/dev/null" ]]; then
+            local log_dir=$(dirname "$output")
+            if [ ! -d "$log_dir" ]; then
+                mkdir -p "$log_dir"
+            fi
+        fi
     fi
 
     if [[ "$cmd_bin" == @* ]]; then
         local url="${cmd_bin#@}"
-        bin_file="$STATE_DIR/$name"
+        bin_file="$STATE_DIR/$name.bin"
         rm -f "$bin_file"
         if ! _download_file "$url" "$bin_file"; then
             log "[$name] download failed"
@@ -163,7 +172,7 @@ _do_start() {
     echo ":$marker" > "$pfile"
     export "$MARKER_NAME"="$marker"
 
-    nohup "$@" < /dev/null >> "$output" 2>&1 &
+    nohup bash -c "exec $@" < /dev/null >> "$output" 2>&1 &
     local new_pid=$!
     
     echo "$new_pid:$marker" > "$pfile"
@@ -209,15 +218,13 @@ _validate_and_start() {
     if [[ "$line" =~ ^[[:space:]]*# ]]; then return 1; fi
     if [[ "$line" != *"|"* ]]; then return 1; fi
 
-    line="${line//\$HOME/$HOME}"
-
     IFS='|' read -r name output cmd <<< "$line"
 
     name=$(_trim "$name")
     output=$(_trim "$output")
     cmd=$(_trim "$cmd")
 
-    [ -z "$name" ] || [ -z "$output" ] || [ -z "$cmd" ] && return 1
+    [ -z "$name" ] || [ -z "$cmd" ] && return 1
     _with_lock "$name" "_do_start" "$output" $cmd
 }
 

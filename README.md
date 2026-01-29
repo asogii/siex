@@ -2,59 +2,65 @@
 
 **Startup** is a lightweight, zero-dependency process manager designed to ensure singleton execution of your services.
 
-It supports **Linux** (Arch, Debian, CentOS, etc.) and **FreeBSD**, utilizing system-level markers to prevent duplicate processes and recover from PID file corruption.
+It supports **Linux** (Arch, Debian, CentOS, etc.) and **FreeBSD**.
 
 ## Key Features
 
 * **Singleton Guarantee**: Uses UUID markers in process environments to strictly ensure only one instance of a service is running.
 * **Atomic Locking**: Thread-safe start/stop operations to prevent race conditions.
 * **Ghost Recovery**: Automatically detects and recovers control of processes even if the PID file is lost or corrupted.
-* **Remote Execution**: Supports `@URL` syntax to download, execute, and auto-delete binary/scripts (Burn-after-reading mode).
-* **Cross-Platform**: Native support for Linux (`/proc`) and FreeBSD (`procstat`).
+* **Remote Execution**: Supports `@URL` syntax to download, execute, and auto-delete binary/scripts.
+* **Bash Expansion**: Fully supports Bash syntax (e.g., `~`, `$HOME`, `$(date)`) in log paths and commands.
 
 ## Usage
 
-### Commands
-
--   `startup start [NAME]...`
-    Start specified process(es). If no name is provided, starts all processes defined in the config.
-
--   `startup stop [NAME]...`
-    Stop specified process(es). If no name is provided, stops all managed processes.
-
--   `startup restart [NAME]...`
-    Restart specified process(es). Safely checks for config existence before stopping the current instance.
-
--   `startup status [NAME]...`
-    Show the status (PID, Running/Down) of processes.
-
--   `startup run "CONFIG_LINE"`
-    Directly run a process using a raw config string (useful for testing).
-    Example: `startup run "test | /tmp/test.log | echo hello"`
+* `startup start [NAME]...` - Start process(es).
+* `startup stop [NAME]...` - Stop process(es).
+* `startup restart [NAME]...` - Restart process(es).
+* `startup status [NAME]...` - Show process status.
+* `startup run "CONFIG_LINE"` - Run a process directly from a raw config string.
 
 ## Configuration
 
 **Default Path:** `$HOME/.startup/config`
-
-The configuration file consists of lines describing processes.
-**Note:** The separator is a pipe `|` to allow spaces in command arguments.
-
-**Format:**
-`NAME | LOG_PATH | COMMAND`
+**Format:** `NAME | LOG_PATH | COMMAND`
 
 ### Examples
 
 ```text
-# Basic example (Absolute paths recommended)
-myweb | /var/log/myweb.log | node /home/user/apps/server.js
+# ============================================
+# Basic Configuration
+# ============================================
 
-# Using $HOME variable (Script will automatically expand it)
-worker | $HOME/logs/worker.log | python3 main.py --env=prod --verbose
+# Standard example: Absolute path logging
+myweb | /var/log/myweb.log | node server.js
 
-# Command with multiple arguments and spaces
-db_proxy | $HOME/logs/proxy.log | ./proxy -c "conf/config with space.ini"
+# Using Bash expansion ( ~, $HOME, Date )
+# This creates a log file like: /home/user/logs/worker_2024-01-29.log
+worker | ~/logs/worker_$(date +%F).log | python3 main.py
 
-# Remote Execution (@URL)
-# The script will: Download -> chmod +x -> Run -> Delete file
-remote_task | $HOME/logs/task.log | @http://192.168.1.5/bin/worker --port 8080
+# ============================================
+# Advanced Options
+# ============================================
+
+# [Log to /dev/null]
+# Leave the middle part empty (or spaces) to disable logging
+silent_task | | ./quiet_script.sh
+# OR explicitly write /dev/null
+null_task   | /dev/null | ./quiet_script.sh
+
+# [Environment Variables]
+# Use 'env' to pass variables to the process
+prod_app | ~/logs/prod.log | env PORT=8080 ENV=production ./app_bin
+
+# [Remote Execution]
+# Download -> Run -> Delete
+remote_job | ~/logs/remote.log | @http://192.168.1.1/script.sh --arg1
+
+# ============================================
+# Disabled / Comments
+# ============================================
+
+# Lines starting with # are ignored
+# legacy_app | /tmp/old.log | ./old_bin
 
