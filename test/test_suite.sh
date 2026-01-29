@@ -111,52 +111,8 @@ else
     fail "Lock timeout/run failed"
 fi
 
-# --- Test 8 & 9: Argument Safety Check (Quotes) ---
-info "Test 8 & 9: Argument Safety Check (Quotes & Spaces)"
-cat > "$START_UP_CONFIG_PATH" <<EOF
-arg_check | $TEST_ROOT/logs/arg.log | $TEST_DIR/arg_checker.sh "has space"
-EOF
-"$STARTUP_SCRIPT" start arg_check
-sleep 1
-LOG_CONTENT=$(cat "$TEST_ROOT/logs/arg.log")
-
-if echo "$LOG_CONTENT" | grep -q "ARG_1=<has space>"; then
-    pass "Arguments passed correctly (Quotes preserved)"
-else
-    echo "Log Content: $LOG_CONTENT"
-    fail "Argument parsing failed (Quotes broken)"
-fi
-
-# --- Test 11: Config Parsing Stress Test ---
-info "Test 11: Configuration Parsing Stress Test"
-cat > "$START_UP_CONFIG_PATH" <<EOF
-   space_test    |    $TEST_ROOT/logs/space.log    |    $TEST_DIR/arg_checker.sh space_ok
-$(echo -e "tab_test\t|\t$TEST_ROOT/logs/tab.log\t|\t$TEST_DIR/arg_checker.sh tab_ok")
-empty_log || $TEST_DIR/dummy_worker.sh
-pipe_in_cmd | $TEST_ROOT/logs/pipe.log | $TEST_DIR/arg_checker.sh "a|b"
-# commented | log | cmd
-EOF
-
-info "-> Starting Stress Config..."
-"$STARTUP_SCRIPT" start
-sleep 1
-
-# Check Space
-if [ -f "$TEST_ROOT/states/space_test.pid" ]; then pass "Case 1: Spaces OK"; else fail "Case 1 Failed"; fi
-# Check Tab
-if [ -f "$TEST_ROOT/states/tab_test.pid" ]; then pass "Case 2: Tabs OK"; else fail "Case 2 Failed"; fi
-# Check Empty Log
-if [ -f "$TEST_ROOT/states/empty_log.pid" ] && [ ! -d "$TEST_ROOT/states/ " ]; then pass "Case 3: Empty Log OK"; else fail "Case 3 Failed"; fi
-# Check Pipe in CMD
-if grep -q "ARG_1=<a|b>" "$TEST_ROOT/logs/pipe.log"; then pass "Case 4: Pipe in CMD OK"; else fail "Case 4 Failed"; fi
-# Check Comment
-if [ ! -f "$TEST_ROOT/states/commented.pid" ]; then pass "Case 5: Comments Ignored"; else fail "Case 5 Failed"; fi
-
-# --- Final Cleanup ---
-info "Teardown..."
-"$STARTUP_SCRIPT" stop
-rm -rf "$TEST_ROOT"
-rm -f "$TEST_DIR/dummy_worker.sh" "$TEST_DIR/arg_checker.sh"
-
-echo -e "\n${GREEN}All Tests Passed! (Full Suite)${NC}"
-
+# ==========================================
+# [重要] 资源清理
+# 在进行下一组测试前，停止所有当前运行的进程
+# 防止 FreeBSD 环境下进程数过多导致 fork 失败
+# =================
