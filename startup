@@ -172,7 +172,7 @@ _do_start() {
     echo ":$marker" > "$pfile"
     export "$MARKER_NAME"="$marker"
 
-    nohup bash -c "exec $@" < /dev/null >> "$output" 2>&1 &
+    nohup bash -c 'exec "$@"' -- "$@" < /dev/null >> "$output" 2>&1 &
     local new_pid=$!
     
     echo "$new_pid:$marker" > "$pfile"
