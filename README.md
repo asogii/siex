@@ -1,33 +1,35 @@
-# Startup - A Simple & Robust Process Manager
+# siex
 
-**Startup** is a lightweight, zero-dependency process manager designed to ensure singleton execution of your services.
+**siex** is a lightweight, pure Bash script, dependency-free process manager for Unix-like systems. It is designed to ensure **singleton execution**, idempotent startups, and robust ghost process recovery without requiring `root` or `systemd`.
 
-It supports **Linux** (Arch, Debian, CentOS, etc.) and **FreeBSD**.
+Ideally suited for user-level services, background workers, and ad-hoc tasks in shared environments.
 
-## Key Features
+## Features
 
-* **Singleton Guarantee**: Uses UUID markers in process environments to strictly ensure only one instance of a service is running.
-* **Atomic Locking**: Thread-safe start/stop operations to prevent race conditions.
-* **Ghost Recovery**: Automatically detects and recovers control of processes even if the PID file is lost or corrupted.
-* **Remote Execution**: Supports `@URL` syntax to download, execute, and auto-delete binary/scripts.
-* **Bash Expansion**: Fully supports Bash syntax (e.g., `~`, `$HOME`, `$(date)`) in log paths and commands.
+- **🔒 Atomic Locking**: Uses `mkdir` atomicity to prevent race conditions during concurrent starts.
+- **👻 Ghost Recovery**: Smartly detects if a PID file belongs to a dead process (via UUID marking) and auto-recovers.
+- **🛡️ Config Integrity**: Strictly prevents startup if duplicate service names or invalid characters are detected.
+- **🌍 Shell Native**: correctly handles `$HOME` expansion, quotes, and complex arguments.
+- **📥 Remote Binary**: Supports downloading binaries on-the-fly via `@url` syntax.
+- **📦 Zero Dependencies**: Pure Bash. Works on Linux, FreeBSD.
 
-## Usage
+## Installation
 
-* `startup start [NAME]...` - Start process(es).
-* `startup stop [NAME]...` - Stop process(es).
-* `startup restart [NAME]...` - Restart process(es).
-* `startup status [NAME]...` - Show process status.
-* `startup run "CONFIG_LINE"` - Run a process directly from a raw config string.
+Simply download the script and give it execution permissions:
+
+```bash
+curl -o siex https://raw.githubusercontent.com/asogii/siex/main/siex
+chmod +x siex
+mv siex ~/bin/  # Optional: move to your path
+```
 
 ## Configuration
 
-**Default Path:** `$HOME/.startup/config`
-**Format:** `NAME | LOG_PATH | COMMAND`
-
-### Examples
+The default configuration file is located at `~/.siex/config`.
+Format: `service_name | log_path | command`
 
 ```text
+# Example ~/.siex/config
 # ============================================
 # Basic Configuration
 # ============================================
@@ -63,4 +65,53 @@ remote_job | ~/logs/remote.log | @http://192.168.1.1/script.sh --arg1
 
 # Lines starting with # are ignored
 # legacy_app | /tmp/old.log | ./old_bin
+```
 
+> **Note**: Service names must only contain `a-z`, `A-Z`, `0-9`, `_`, `-`, and `.`.
+
+## Usage
+
+### Start Services
+
+    # Start all services in config
+    siex start
+
+    # Start specific service(s)
+    siex start web_server data_worker
+
+### Stop Services
+
+    # Stop all running services
+    siex stop
+
+    # Stop specific service
+    siex stop web_server
+
+### Check Status
+
+    siex status
+
+### Restart
+
+    siex restart web_server
+
+### Run Ad-hoc Command
+Execute a single command immediately (bypassing config file) with full locking and singleton protection:
+
+    siex run "temp_job | temp.log | sleep 60"
+
+## Environment Variables
+
+You can customize **siex** by setting these environment variables:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `SIEX_PATH` | `~/.siex` | Root directory for state and config. |
+| `SIEX_CONFIG_PATH` | `~/.siex/config` | Path to the configuration file. |
+| `SIEX_KILL_WAIT_TIME` | `10` | Seconds to wait for graceful stop before `kill -9`. |
+| `SIEX_LOCK_TIMEOUT` | `600` | Seconds before a stale lock file is forcibly broken. |
+| `SIEX_TIME_ZONE` | `Asia/Shanghai` | Timezone used for log timestamps. |
+
+## License
+
+MIT License.

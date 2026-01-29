@@ -1,12 +1,18 @@
 #!/bin/bash
 
-ROOT_PATH=${START_UP_PATH:-$HOME/.startup}
-CONFIG_FILE=${START_UP_CONFIG_PATH:-$ROOT_PATH/config}
-KILL_WAIT=${START_UP_KILL_WAIT_TIME:-10}
-LOCK_TIMEOUT=${START_UP_LOCK_TIMEOUT:-600}
-TIME_ZONE=${START_UP_TIME_ZONE:-Asia/Shanghai}
+# ==========================================
+# siex
+# Copyright (c) 2026 Asogii
+# Licensed under the MIT License.
+# ==========================================
 
-MARKER_NAME="__STARTUP_${USER}_GUARD_UUID__"
+ROOT_PATH=${SIEX_PATH:-$HOME/.siex}
+CONFIG_FILE=${SIEX_CONFIG_PATH:-$ROOT_PATH/config}
+KILL_WAIT=${SIEX_KILL_WAIT_TIME:-10}
+LOCK_TIMEOUT=${SIEX_LOCK_TIMEOUT:-600}
+TIME_ZONE=${SIEX_TIME_ZONE:-Asia/Shanghai}
+
+MARKER_NAME="__SIEX_${USER}_GUARD_UUID__"
 STATE_DIR="$ROOT_PATH/states"
 
 mkdir -p "$STATE_DIR"
