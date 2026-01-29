@@ -10,7 +10,7 @@ ROOT_PATH=${SIEX_PATH:-$HOME/.siex}
 CONFIG_FILE=${SIEX_CONFIG_PATH:-$ROOT_PATH/config}
 KILL_WAIT=${SIEX_KILL_WAIT_TIME:-10}
 LOCK_TIMEOUT=${SIEX_LOCK_TIMEOUT:-600}
-TIME_ZONE=${SIEX_TIME_ZONE:-Asia/Shanghai}
+LOG_TZ=${SIEX_LOG_TZ:-}
 
 MARKER_NAME="__SIEX_${USER}_GUARD_UUID__"
 STATE_DIR="$ROOT_PATH/states"
@@ -18,8 +18,10 @@ STATE_DIR="$ROOT_PATH/states"
 mkdir -p "$STATE_DIR"
 cd "$STATE_DIR" || exit 1
 
+DATE_FMT='+%F %T.%N'
+[ "$(date +%N 2>/dev/null)" = "N" ] && DATE_FMT='+%F %T'
 log() {
-    echo "[$(TZ=$TIME_ZONE date '+%F %T.%N')] $@"
+    echo "[$(TZ=$LOG_TZ date "$DATE_FMT")] $@"
 }
 
 _trim() {

@@ -110,7 +110,7 @@ You can customize **siex** by setting these environment variables:
 | `SIEX_CONFIG_PATH` | `~/.siex/config` | Path to the configuration file. |
 | `SIEX_KILL_WAIT_TIME` | `10` | Seconds to wait for graceful stop before `kill -9`. |
 | `SIEX_LOCK_TIMEOUT` | `600` | Seconds before a stale lock file is forcibly broken. |
-| `SIEX_TIME_ZONE` | `Asia/Shanghai` | Timezone used for log timestamps. |
+| `SIEX_LOG_TZ` | `[DEFAULT]` | Timezone used for log timestamps. |
 
 ## License
 
