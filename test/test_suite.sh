@@ -111,14 +111,33 @@ else
     fail "Lock timeout/run failed"
 fi
 
-# ==========================================
-# [重要] 资源清理
-# 在进行下一组测试前，停止所有当前运行的进程
-# 防止 FreeBSD 环境下进程数过多导致 fork 失败
-# ==========================================
+# --- CLEANUP for Resource Limited Env ---
 info "Cleaning up previous processes..."
 "$STARTUP_SCRIPT" stop
-sleep 2 # 给系统一点回收时间
+sleep 2
+
+# --- Test 7: Env Variable Expansion ($HOME) ---
+info "Test 7: Environment Variable Expansion (\$HOME)"
+# 这里使用 $HOME 变量，如果脚本不进行展开，就会报错找不到文件
+cat > "$START_UP_CONFIG_PATH" <<EOF
+env_expand_test | $TEST_ROOT/logs/env.log | \$HOME/dummy_link.sh
+EOF
+
+# 创建一个链接到 dummy_worker 的文件，放在 HOME 下测试
+ln -sf "$TEST_DIR/dummy_worker.sh" "$HOME/dummy_link.sh"
+
+"$STARTUP_SCRIPT" start env_expand_test
+if [ -f "$TEST_ROOT/states/env_expand_test.pid" ]; then
+    pass "Variable \$HOME expanded correctly"
+else
+    fail "Failed to expand \$HOME"
+fi
+rm -f "$HOME/dummy_link.sh"
+
+# --- CLEANUP ---
+info "Cleaning up..."
+"$STARTUP_SCRIPT" stop
+sleep 2
 
 # --- Test 8 & 9: Argument Safety Check (Quotes) ---
 info "Test 8 & 9: Argument Safety Check (Quotes & Spaces)"
@@ -136,11 +155,8 @@ else
     fail "Argument parsing failed (Quotes broken)"
 fi
 
-# ==========================================
-# [重要] 再次清理
-# 压力测试会启动多个进程，必须先清空环境
-# ==========================================
-info "Cleaning up before Stress Test..."
+# --- CLEANUP ---
+info "Cleaning up..."
 "$STARTUP_SCRIPT" stop
 sleep 2
 
