@@ -344,6 +344,7 @@ restart() {
 }
 
 status() {
+    TZ=$LOG_TZ date "$DATE_FMT"
     if [ $# -eq 0 ]; then
         local all_names=""
         if [ -f "$CONFIG_FILE" ]; then
